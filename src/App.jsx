@@ -7,6 +7,26 @@ import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 // Set PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+const getErrorMessage = (payload) => {
+  if (!payload) return 'Unknown error';
+  if (typeof payload === 'string') return payload;
+  if (payload instanceof Error) return payload.message || 'Unknown error';
+
+  if (typeof payload === 'object') {
+    if (typeof payload.error === 'string') return payload.error;
+    if (payload.error && typeof payload.error.message === 'string') return payload.error.message;
+    if (typeof payload.message === 'string') return payload.message;
+    if (typeof payload.details === 'string') return payload.details;
+
+    try {
+      return JSON.stringify(payload);
+    } catch {
+      return 'Unknown error';
+    }
+  }
+
+  return String(payload);
+};
 
 const SYSTEM_PROMPT = `You are a senior QA engineer specializing in API testing.
 
@@ -136,7 +156,7 @@ Each test case must have:
 - title: Specific descriptive title that uniquely identifies this scenario — must mention what is being tested and what is invalid/valid
 - preconditions: Exact DB state and auth state required before running the test
 - steps: Array of minimum 5 detailed steps — each step includes exact header values, exact path used, exact body, and precise assertion for that step
-- expected_result: Exact HTTP status code + exact response body expectations with specific field types and values
+- expected_result: Actual response produced when the API is hit, including exact HTTP status code and complete concrete response body JSON with field-by-field value/type validation
 - category: "positive", "negative", or "edge" only
 - endpoint: Full endpoint with method (e.g., GET /v1/internal/auto-donation/:user_id/active-schedules)
 - request_payload: Concrete object with actual parameter values and actual header values used in this test — never use placeholders
@@ -157,7 +177,6 @@ const CATEGORY_ICONS = {
 };
 
 export default function App() {
-  const [apiKey, setApiKey] = useState(localStorage.getItem('ANTHROPIC_API_KEY') || '');
   const [file, setFile] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -169,11 +188,6 @@ export default function App() {
 
   const fileInputRef = useRef(null);
 
-  const handleApiKeyChange = (e) => {
-    const key = e.target.value;
-    setApiKey(key);
-    localStorage.setItem('ANTHROPIC_API_KEY', key);
-  };
 
   const handleDragOver = useCallback((e) => {
     e.preventDefault();
@@ -220,10 +234,6 @@ export default function App() {
   }, []);
 
   const handleGenerate = async () => {
-    if (!apiKey) {
-      setError('Anthropic API Key is required.');
-      return;
-    }
     if (!file) {
       setError('Please provide a PDF file.');
       return;
@@ -255,7 +265,6 @@ export default function App() {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          apiKey: apiKey,
           systemPrompt: SYSTEM_PROMPT,
           pdfText: pdfText,
           model: 'claude-sonnet-4-20250514'
@@ -275,7 +284,7 @@ export default function App() {
 
       if (!response.ok) {
         console.error('Full API Error:', data || rawResponse);
-        throw new Error(data?.error || `Failed to generate test cases. Error: ${response.status}`);
+        throw new Error(getErrorMessage(data) || `Failed to generate test cases. Error: ${response.status}`);
       }
 
       if (!data || !data.content || !Array.isArray(data.content) || !data.content[0]?.text) {
@@ -326,7 +335,7 @@ export default function App() {
       }
     } catch (err) {
       console.error(err);
-      setError(`Error: ${err.message}`);
+      setError(`Error: ${getErrorMessage(err)}`);
     } finally {
       setIsLoading(false);
     }
@@ -355,23 +364,38 @@ export default function App() {
 
   const exportCSV = () => {
     if (testCases.length === 0) return;
-    const headers = ['Test ID', 'Category', 'Title', 'Endpoint', 'Expected Status', 'Preconditions', 'Request Payload', 'Expected Result', 'Steps'];
-    const rows = testCases.map(tc => [
-      tc.test_id || '',
-      tc.category || '',
-      `"${String(tc.title || '').replace(/"/g, '""')}"`,
-      tc.endpoint || '',
-      tc.expected_status || '',
-      `"${String(tc.preconditions || '').replace(/"/g, '""')}"`,
-      `"${(typeof tc.request_payload === 'string' ? tc.request_payload : JSON.stringify(tc.request_payload || {}, null, 2)).replace(/"/g, '""')}"`,
-      `"${String(tc.expected_result || '').replace(/"/g, '""')}"`,
-      `"${Array.isArray(tc.steps) ? tc.steps.join('\\n').replace(/"/g, '""') : ''}"`
-    ]);
-    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+
+    const csvEscape = (value) => {
+      const text = String(value ?? '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n');
+      return `"${text.replace(/"/g, '""')}"`;
+    };
+
+    const headers = ['Test ID', 'Title', 'Preconditions', 'Steps', 'Expected Result'];
+    const rows = testCases.map((tc) => {
+      const stepsText = Array.isArray(tc.steps)
+        ? tc.steps.map((step, index) => `${index + 1}. ${step}`).join('\n')
+        : '';
+
+      const expectedResultText = typeof tc.expected_result === 'string'
+        ? tc.expected_result
+        : JSON.stringify(tc.expected_result || {}, null, 2);
+
+      return [
+        csvEscape(tc.test_id || ''),
+        csvEscape(tc.title || ''),
+        csvEscape(tc.preconditions || ''),
+        csvEscape(stepsText),
+        csvEscape(expectedResultText)
+      ];
+    });
+
+    const csvContent = [headers.map(csvEscape).join(','), ...rows.map((r) => r.join(','))].join('\r\n');
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = 'test_cases.csv';
+    link.download = 'test_cases_excel.csv';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -404,17 +428,6 @@ export default function App() {
 
         <section className="mb-8 grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="md:col-span-1 flex flex-col gap-4">
-            <div className="bg-[#0c121b] border border-gray-800 p-4 rounded-sm">
-              <label className="block text-primary mb-2 text-xs uppercase tracking-wider">Anthropic API Key</label>
-              <input
-                type="password"
-                value={apiKey}
-                onChange={handleApiKeyChange}
-                placeholder="sk-ant-..."
-                className="w-full bg-background border border-gray-700 px-3 py-2 text-gray-200 focus:outline-none focus:border-primary transition-colors"
-              />
-              <p className="text-xs text-gray-500 mt-2">Stored locally in your browser.</p>
-            </div>
 
             <div
               className={`bg-[#0c121b] border-2 border-dashed p-6 rounded-sm text-center transition-all ${isDragging ? 'border-primary bg-primary/5' : 'border-gray-700 hover:border-gray-500'} ${file ? 'border-primary' : ''}`}
@@ -455,8 +468,8 @@ export default function App() {
 
             <button
               onClick={handleGenerate}
-              disabled={isLoading || !file || !apiKey}
-              className={`w-full py-3 px-4 font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${isLoading || !file || !apiKey
+              disabled={isLoading || !file}
+              className={`w-full py-3 px-4 font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${isLoading || !file
                 ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
                 : 'bg-primary text-background hover:bg-[#00e67a] shadow-[0_0_15px_rgba(0,255,136,0.3)] hover:shadow-[0_0_20px_rgba(0,255,136,0.5)]'
                 }`}
@@ -614,6 +627,12 @@ export default function App() {
     </div>
   );
 }
+
+
+
+
+
+
 
 
 

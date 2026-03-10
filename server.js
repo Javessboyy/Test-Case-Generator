@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 
@@ -249,11 +250,12 @@ Return ONLY a JSON array.`;
 
 app.post('/api/generate-test-cases', async (req, res) => {
     try {
-        const { apiKey, systemPrompt, pdfText, model } = req.body;
+        const { systemPrompt, pdfText, model } = req.body;
         const selectedModel = model || DEFAULT_MODEL;
+        const apiKey = process.env.ANTHROPIC_API_KEY;
 
         if (!apiKey) {
-            return res.status(400).json({ error: 'API key is required' });
+            return res.status(500).json({ error: 'Server API key is not configured. Set ANTHROPIC_API_KEY on backend.' });
         }
 
         if (!pdfText) {
@@ -344,3 +346,7 @@ app.post('/api/generate-test-cases', async (req, res) => {
 app.listen(PORT, () => {
     console.log(`Backend server running on http://localhost:${PORT}`);
 });
+
+
+
+
