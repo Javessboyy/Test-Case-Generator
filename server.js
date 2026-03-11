@@ -8,7 +8,7 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.text({ limit: '50mb' }));
 
 const PORT = 3001;
-const DEFAULT_MODEL = 'claude-sonnet-4-20250514';
+const DEFAULT_MODEL = process.env.OPENROUTER_MODEL || 'anthropic/claude-3.5-sonnet';
 const MIN_TEST_CASES = 35;
 const MAX_EXPANSION_ATTEMPTS = 2;
 
@@ -95,29 +95,27 @@ function tryParseJsonArray(rawText) {
     return null;
 }
 
-function normalizeCase(tc, index) {
+function normalizeCase(tc) {
     const safe = tc && typeof tc === 'object' ? tc : {};
+    const testSteps = Array.isArray(safe.test_steps) ? safe.test_steps.filter(Boolean).map((s) => String(s)) : [];
     const steps = Array.isArray(safe.steps) ? safe.steps.filter(Boolean).map((s) => String(s)) : [];
+    const behaviour = String(safe.behaviour || 'positive').toLowerCase();
 
     return {
-        test_id: safe.test_id || `TC-${String(index + 1).padStart(3, '0')}`,
         title: String(safe.title || 'Untitled test case'),
-        preconditions: String(safe.preconditions || '-'),
-        steps,
+        test_steps: testSteps.length ? testSteps : steps,
         expected_result: String(safe.expected_result || '-'),
-        category: String(safe.category || 'positive').toLowerCase(),
-        endpoint: String(safe.endpoint || '-'),
-        request_payload: safe.request_payload ?? '',
-        expected_status: safe.expected_status ?? ''
+        priority: String(safe.priority || 'Medium'),
+        behaviour
     };
 }
 
 function mergeUniqueCases(existingCases, newCases) {
     const merged = [...existingCases];
-    const seen = new Set(existingCases.map((tc) => `${String(tc.endpoint).toLowerCase()}|${String(tc.title).toLowerCase()}`));
+    const seen = new Set(existingCases.map((tc) => `${String(tc.title).toLowerCase()}|${String(tc.behaviour || '').toLowerCase()}`));
 
     for (const tc of newCases) {
-        const key = `${String(tc.endpoint).toLowerCase()}|${String(tc.title).toLowerCase()}`;
+        const key = `${String(tc.title).toLowerCase()}|${String(tc.behaviour || '').toLowerCase()}`;
         if (seen.has(key)) continue;
         seen.add(key);
         merged.push(tc);
@@ -126,17 +124,21 @@ function mergeUniqueCases(existingCases, newCases) {
     return merged;
 }
 
-async function callAnthropic({ apiKey, model, prompt, maxTokens = 2000 }) {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+async function callOpenRouter({ apiKey, model, prompt }) {
+    const headers = {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+    };
+    const referer = process.env.OPENROUTER_REFERER;
+    const title = process.env.OPENROUTER_TITLE;
+    if (referer) headers['HTTP-Referer'] = referer;
+    if (title) headers['X-OpenRouter-Title'] = title;
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01'
-        },
+        headers,
         body: JSON.stringify({
             model,
-            max_tokens: maxTokens,
             messages: [{ role: 'user', content: prompt }]
         })
     });
@@ -155,7 +157,7 @@ async function callAnthropic({ apiKey, model, prompt, maxTokens = 2000 }) {
     return { response, raw, data };
 }
 
-async function repairJsonWithAnthropic({ apiKey, model, invalidOutput }) {
+async function repairJsonWithOpenRouter({ apiKey, model, invalidOutput }) {
     const repairPrompt = `You are a JSON repair engine. Convert the content below into a strict valid JSON array.
 
 Rules:
@@ -167,22 +169,22 @@ Rules:
 Content to repair:
 ${String(invalidOutput || '').substring(0, 12000)}`;
 
-    const { response, raw, data } = await callAnthropic({
+    const { response, raw, data } = await callOpenRouter({
         apiKey,
         model,
-        prompt: repairPrompt,
-        maxTokens: 5000
+        prompt: repairPrompt
     });
 
     if (!response.ok) {
         return {
             ok: false,
-            reason: 'Anthropic repair request failed',
+            reason: 'OpenRouter repair request failed',
             details: data || raw
         };
     }
 
-    const repairedText = data?.content?.[0]?.text || '';
+    const repairedText = data?.choices?.[0]?.message?.content || '';
+
     const parsed = tryParseJsonArray(repairedText);
 
     if (!parsed) {
@@ -212,23 +214,23 @@ ${JSON.stringify(cases).substring(0, 12000)}
 Generate ${remaining + 8} additional UNIQUE test cases to reach at least ${MIN_TEST_CASES} total cases.
 Return ONLY a JSON array.`;
 
-        const { response, raw, data } = await callAnthropic({
+        const { response, raw, data } = await callOpenRouter({
             apiKey,
             model,
-            prompt: expansionPrompt,
-            maxTokens: 5000
-        });
+            prompt: expansionPrompt
+    });
 
         if (!response.ok) {
-            console.error('Anthropic expansion error:', data || raw);
+            console.error('OpenRouter expansion error:', data || raw);
             break;
         }
 
-        const expandedText = data?.content?.[0]?.text || '';
+        const expandedText = data?.choices?.[0]?.message?.content || '';
+
         let expandedParsed = tryParseJsonArray(expandedText);
 
         if (!expandedParsed) {
-            const repaired = await repairJsonWithAnthropic({ apiKey, model, invalidOutput: expandedText });
+            const repaired = await repairJsonWithOpenRouter({ apiKey, model, invalidOutput: expandedText });
             if (!repaired.ok) {
                 console.error('Expansion parse/repair failed:', repaired.reason);
                 continue;
@@ -249,13 +251,17 @@ Return ONLY a JSON array.`;
 }
 
 app.post('/api/generate-test-cases', async (req, res) => {
+    res.setHeader('X-AI-Provider', 'openrouter');
     try {
         const { systemPrompt, pdfText, model } = req.body;
         const selectedModel = model || DEFAULT_MODEL;
-        const apiKey = process.env.ANTHROPIC_API_KEY;
+        const apiKey = process.env.OPENROUTER_API_KEY;
 
         if (!apiKey) {
-            return res.status(500).json({ error: 'Server API key is not configured. Set ANTHROPIC_API_KEY on backend.' });
+            if (!process.env.OPENROUTER_API_KEY && process.env.ANTHROPIC_API_KEY) {
+            return res.status(500).json({ error: 'OPENROUTER_API_KEY is missing. You still have ANTHROPIC_API_KEY set. Update env vars to OpenRouter.' });
+        }
+        return res.status(500).json({ error: 'Server API key is not configured. Set OPENROUTER_API_KEY on backend.' });
         }
 
         if (!pdfText) {
@@ -274,34 +280,33 @@ app.post('/api/generate-test-cases', async (req, res) => {
 
         const prompt = `${systemPrompt}\n\n${cleanPdfText}\n\nGenerate API test cases based on this backend documentation.`;
 
-        const { response, raw, data } = await callAnthropic({
+        const { response, raw, data } = await callOpenRouter({
             apiKey,
             model: selectedModel,
-            prompt,
-            maxTokens: 5000
-        });
+            prompt});
 
         if (!response.ok) {
-            console.error('Anthropic API error:', data || raw);
+            console.error('OpenRouter API error:', data || raw);
             if (data && typeof data === 'object') {
                 return res.status(response.status).json(data);
             }
             return res.status(response.status).json({
-                error: 'Anthropic API request failed',
+                error: 'OpenRouter API request failed',
                 status: response.status,
                 details: raw ? raw.substring(0, 500) : 'Empty response body'
             });
         }
 
-        if (!data || !Array.isArray(data.content) || data.content.length === 0) {
-            return res.status(500).json({ error: 'Invalid response structure from Anthropic API' });
+        if (!data || !Array.isArray(data.choices) || data.choices.length === 0) {
+            return res.status(500).json({ error: 'Invalid response structure from OpenRouter API' });
         }
 
-        const initialText = data.content[0]?.text || '';
+        const initialText = data.choices[0]?.message?.content || '';
+
         let parsedResult = tryParseJsonArray(initialText);
 
         if (!parsedResult) {
-            const repaired = await repairJsonWithAnthropic({
+            const repaired = await repairJsonWithOpenRouter({
                 apiKey,
                 model: selectedModel,
                 invalidOutput: initialText
@@ -329,10 +334,8 @@ app.post('/api/generate-test-cases', async (req, res) => {
         });
 
         return res.json({
-            ...data,
             content: [
                 {
-                    ...data.content[0],
                     text: JSON.stringify(normalizedCases)
                 }
             ]

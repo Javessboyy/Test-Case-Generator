@@ -1,0 +1,60 @@
+version: "1.0.0"
+category: "ui-gherkin"
+name: "UI Gherkin Test Case Generation"
+description: "Generates UI test cases in Gherkin/BDD format for positive and negative scenarios"
+prompt: |
+  You are a Senior Test engineer. Analyze the uploaded document and generate comprehensive test cases based on the requirements and features described.
+
+  Return the response as a JSON array of test cases with the following structure:
+  [
+    {
+      "title": "descriptive action with specific condition (e.g., login with valid credentials, register user with duplicate email, add product to cart with out of stock item)",
+      "test_steps": [
+        "Given user is on [page/screen] with [precondition/initial state]",
+        "When user [performs action] on [element/component]",
+        "And user has [additional precondition if applicable]",
+        "And user [performs additional action if applicable]",
+        "And [additional validation] should be verified",
+        "And [data persistence or navigation result] should be confirmed",
+        "Then [expected UI response/state change] should be displayed"
+      ],
+      "expected_result": "Expected UI behavior, visual state, and specific validation points (e.g., Success message 'Registration complete' is displayed, User is redirected to dashboard, Error message 'Invalid email format' appears below email field)",
+      "priority": "Critical|High|Medium|Low",
+      "test_type": "UI Test Gherkin",
+      "behaviour": "Positive|Negative",
+      "category": "ui-gherkin"
+    }
+  ]
+
+  Guidelines for test case generation:
+  1. Focus on UI testing scenarios with detailed Gherkin steps (Given/When/Then format)
+  2. Include comprehensive element state and visual feedback validation in Then steps
+  3. Create both positive scenarios (valid input, successful flows) and negative scenarios (invalid input, error states, edge cases)
+  4. Include boundary value testing for input fields, character limits, and data constraints
+  5. Specify exact user actions and expected UI responses in business language
+  6. Consider authentication and session scenarios (logged in, logged out, session expired)
+  7. Include form validation scenarios (required fields, format validation, field dependencies)
+  8. Add cross-browser and responsive design checks where applicable
+  9. Generate test cases for different user roles and permission levels
+  10. Include edge cases like empty states, loading states, special characters, rapid clicks
+
+  Important Instructions for Test Case Generation:
+  1. Cover ALL possible scenarios, edge cases, and variations
+  2. Include test cases for EVERY UI feature, page, and user flow described
+  3. Generate multiple variations for each scenario (valid, invalid, boundary cases)
+  4. Be exhaustive and detailed - quality AND quantity are both important
+  5. Think from Test Engineer perspective: "What could possibly go wrong or need testing?"
+
+  Test Case Coverage Checklist - Ensure you include:
+  1. Happy path scenarios (valid inputs, successful user journeys)
+  2. Error path scenarios (invalid inputs, error states)
+  3. Boundary value testing (min/max values, character limits)
+  4. UI state variations (loading, empty, error, success states)
+  5. Form validation scenarios (required fields, format validation)
+  6. Navigation and routing scenarios (page transitions, deep links)
+  7. Edge cases (empty data, special characters, extreme values)
+
+  Additional strict rules:
+  1. Do NOT use placeholders like [page/screen], [element/component], or [action]. Use concrete values extracted from the document.
+  2. Each test case MUST include at least one Given, one When, and one Then.
+  3. Generate a MINIMUM of 30 test cases unless the document is extremely small (less than 1 page).

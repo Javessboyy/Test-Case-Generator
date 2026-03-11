@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useMemo, useRef } from 'react';
-import { Upload, FileText, Download, Copy, ChevronDown, ChevronUp, Loader2, CheckCircle, AlertCircle, AlertTriangle, Shield, Check } from 'lucide-react';
+import { Upload, FileText, Download, Copy, ChevronDown, ChevronUp, Loader2, CheckCircle, AlertCircle, Shield, Check } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
 
 // Import worker
@@ -28,152 +28,67 @@ const getErrorMessage = (payload) => {
   return String(payload);
 };
 
-const SYSTEM_PROMPT = `You are a senior QA engineer specializing in API testing.
+const DEFAULT_MODEL = import.meta.env.VITE_OPENROUTER_MODEL || 'anthropic/claude-3.5-sonnet';
 
-CRITICAL: Read the ENDPOINT DOCUMENTATION section below carefully before generating test cases.
+const SYSTEM_PROMPT = `You are a Senior Test engineer. Analyze the uploaded document and generate comprehensive test cases based on the requirements and features described.
 
--------------------------------------------
-ENDPOINT DOCUMENTATION
--------------------------------------------
+Return the response as a JSON array of test cases with the following structure:
+[
+  {
+    "title": "descriptive action with specific condition (e.g., login with valid credentials, register user with duplicate email, add product to cart with out of stock item)",
+    "test_steps": [
+      "Given user is on [page/screen] with [precondition/initial state]",
+      "When user [performs action] on [element/component]",
+      "And user has [additional precondition if applicable]",
+      "And user [performs additional action if applicable]",
+      "And [additional validation] should be verified",
+      "And [data persistence or navigation result] should be confirmed",
+      "Then [expected UI response/state change] should be displayed"
+    ],
+    "expected_result": "Expected UI behavior, visual state, and specific validation points (e.g., Success message 'Registration complete' is displayed, User is redirected to dashboard, Error message 'Invalid email format' appears below email field)",
+    "priority": "Critical|High|Medium|Low",
+    "behaviour": "Positive|Negative"
+  }
+]
 
-[REPLACE THIS ENTIRE BLOCK WITH YOUR ENDPOINT DOCUMENTATION]
+Guidelines for test case generation:
+1. Focus on UI testing scenarios with detailed Gherkin steps (Given/When/Then format)
+2. Include comprehensive element state and visual feedback validation in Then steps
+3. Create both positive scenarios (valid input, successful flows) and negative scenarios (invalid input, error states, edge cases)
+4. Include boundary value testing for input fields, character limits, and data constraints
+5. Specify exact user actions and expected UI responses in business language
+6. Consider authentication and session scenarios (logged in, logged out, session expired)
+7. Include form validation scenarios (required fields, format validation, field dependencies)
+8. Add cross-browser and responsive design checks where applicable
+9. Generate test cases for different user roles and permission levels
+10. Include edge cases like empty states, loading states, special characters, rapid clicks
 
-Include:
-- Endpoint path & HTTP method
-- Auth type (Basic Auth, Bearer, Signature, etc.)
-- Path/query parameters with types and required/optional
-- Request headers
-- Response structure (full JSON example)
-- Business logic / rules
-- DB query (if available)
-- Error codes (if available)
+Important Instructions for Test Case Generation:
+1. Cover ALL possible scenarios, edge cases, and variations
+2. Include test cases for EVERY UI feature, page, and user flow described
+3. Generate multiple variations for each scenario (valid, invalid, boundary cases)
+4. Be exhaustive and detailed - quality AND quantity are both important
+5. Think from Test Engineer perspective: "What could possibly go wrong or need testing?"
 
--------------------------------------------
-TEST CASE GENERATION RULES
--------------------------------------------
+Test Case Coverage Checklist - Ensure you include:
+1. Happy path scenarios (valid inputs, successful user journeys)
+2. Error path scenarios (invalid inputs, error states)
+3. Boundary value testing (min/max values, character limits)
+4. UI state variations (loading, empty, error, success states)
+5. Form validation scenarios (required fields, format validation)
+6. Navigation and routing scenarios (page transitions, deep links)
+7. Edge cases (empty data, special characters, extreme values)
 
-Analyze the documentation above and generate exhaustive test cases.
-There are only THREE categories: "positive", "negative", and "edge".
-DO NOT create a separate "auth" category — all auth scenarios must go inside positive or negative.
-
-------------------------------------------
-POSITIVE — cover all of these:
-------------------------------------------
-FUNCTIONAL:
-- Happy path with all valid inputs and valid auth
-- Each valid variation of path/query parameters individually
-- Boundary values (min valid, max valid)
-- Every possible valid status/category value in response
-- User exists with data ? verify response array is populated
-- User exists with no matching data ? verify response array is empty []
-- All response fields present with correct types and values
-- Response metadata fields (version, api_status, api_env) present and non-null
-- response_code = "000000" on success
-- Business logic rules each verified individually as separate test cases
-
-AUTH (inside positive):
-- Valid Basic Auth + valid Signature ? full success
-- Basic Auth credentials with minimum valid format
-- Basic Auth credentials with long valid username:password
-- Valid auth on repeated requests ? consistent result
-
-------------------------------------------
-NEGATIVE — each must isolate exactly ONE invalid variable:
-------------------------------------------
-PATH PARAMETER:
-- Each required path parameter: missing, empty string, whitespace only
-- Each required path parameter: wrong type (string, float, boolean, null literal)
-- Each required path parameter: invalid format (special chars, SQL injection pattern, XSS pattern, path traversal, emoji, unicode)
-- Each required path parameter: non-existent resource (valid format but no DB record)
-- Each required path parameter: boundary violations (0, negative, extremely large number, extremely long string >1000 chars)
-
-HTTP METHOD:
-- POST instead of correct method (same valid auth and params)
-- PUT instead of correct method
-- DELETE instead of correct method
-- PATCH instead of correct method
-
-AUTH — Basic Auth (each as its own separate test case):
-- Missing Authorization header entirely (no header key at all)
-- Authorization header present but empty value ""
-- Wrong auth scheme: "Bearer abc123" instead of "Basic ..."
-- Wrong auth scheme: "Token abc123" instead of "Basic ..."
-- Basic Auth wrong username only (correct password) — base64 of "wronguser:password"
-- Basic Auth wrong password only (correct username) — base64 of "username:wrongpass"
-- Basic Auth both wrong username and wrong password — base64 of "wronguser:wrongpass"
-- Basic Auth empty username only — base64 of ":password" ? "OnBhc3N3b3Jk"
-- Basic Auth empty password only — base64 of "username:" ? "dXNlcm5hbWU6"
-- Basic Auth empty username and empty password — base64 of ":" ? "Og=="
-- Basic Auth malformed base64 value — "!!!notbase64!!!"
-- Basic Auth valid credentials but no space after "Basic" keyword ? "Basicdxnlcm5hbWU6cGFzc3dvcmQ="
-
-AUTH — Signature Header (each as its own separate test case):
-- Missing Signature header entirely (Authorization valid, Signature header absent)
-- Signature header present but empty value ""
-- Signature header with completely random/wrong value — "Kitabisa t=1700000000,v1=wrongvalue123"
-- Signature header with expired timestamp — "Kitabisa t=1600000000,v1=abc123def456"
-- Signature header with future timestamp — "Kitabisa t=9999999999,v1=abc123def456"
-- Signature generated for different endpoint path (e.g., /v1/internal/other-endpoint)
-- Signature generated for different resource ID (e.g., user_id=99999 but path uses 11111)
-- Signature header malformed structure (missing "t=" component)
-- Signature header malformed structure (missing "v1=" component)
-- Valid Basic Auth + valid Signature but generated for wrong environment
-
-------------------------------------------
-EDGE — boundary and unusual scenarios:
-------------------------------------------
-- Resource with exactly 1 result item in data array
-- Resource with large number of result items (50+) — verify no truncation
-- Resource exists but all records filtered out by business logic ? data = []
-- Records with non-active statuses exist ? verify they are excluded from response
-- Concurrent identical requests ? verify consistent response (no race condition)
-- Extra unknown headers in request ? verify response is not affected
-- response_code is string type "000000" not integer 0
-- id field in data items is integer type, not string
-- status field value is exactly "ACTIVE" or "INACTIVE_INSUFFICIENT_BALANCE" (case-sensitive)
-- category field value is exactly "DIRECT_TO_CAMPAIGN" for direct donations (case-sensitive)
-- No extra undocumented fields present in response data items
-- data field is array type, not null and not object
-
--------------------------------------------
-STRICT RULES
--------------------------------------------
-- ZERO duplicate test cases — every test_id, title, and scenario must be completely unique
-- NO limit on number of test cases — generate as many as needed for full coverage
-- Only THREE categories allowed: "positive", "negative", "edge" — never use "auth"
-- Each NEGATIVE test isolates exactly ONE invalid variable — never combine two invalid inputs in one test
-- Each step must use concrete real values — actual integers, actual base64 strings, actual header names and values
-- Never use placeholders like "your_token", "example_value", or "<insert_here>"
-- Extract concrete example values from the documentation provided and use them throughout
-- Every business logic rule must have its own dedicated test case
-- Every response field must have its own type and value validation test case
-- All auth scenarios belong inside "positive" or "negative" — never in a separate category
-
-Return ONLY a valid JSON array with NO markdown, NO backticks, NO explanation.
-
-Each test case must have:
-- test_id: Unique sequential ID (e.g., TC-001, TC-002, TC-003)
-- title: Specific descriptive title that uniquely identifies this scenario — must mention what is being tested and what is invalid/valid
-- preconditions: Exact DB state and auth state required before running the test
-- steps: Array of minimum 5 detailed steps — each step includes exact header values, exact path used, exact body, and precise assertion for that step
-- expected_result: Actual response produced when the API is hit, including exact HTTP status code and complete concrete response body JSON with field-by-field value/type validation
-- category: "positive", "negative", or "edge" only
-- endpoint: Full endpoint with method (e.g., GET /v1/internal/auto-donation/:user_id/active-schedules)
-- request_payload: Concrete object with actual parameter values and actual header values used in this test — never use placeholders
-- expected_status: Expected HTTP status code as integer`;
+Return ONLY a valid JSON array with NO markdown, NO backticks, NO explanation.`;
 
 const CATEGORY_STYLES = {
   positive: 'text-primary border-primary',
-  negative: 'text-negative border-negative',
-  edge: 'text-edge border-edge',
-  auth: 'text-auth border-auth'
+  negative: 'text-negative border-negative'
 };
 
 const CATEGORY_ICONS = {
   positive: <CheckCircle size={16} className="text-primary" />,
-  negative: <AlertCircle size={16} className="text-negative" />,
-  edge: <AlertTriangle size={16} className="text-edge" />,
-  auth: <Shield size={16} className="text-auth" />
+  negative: <AlertCircle size={16} className="text-negative" />
 };
 
 export default function App() {
@@ -267,7 +182,7 @@ export default function App() {
         body: JSON.stringify({
           systemPrompt: SYSTEM_PROMPT,
           pdfText: pdfText,
-          model: 'claude-sonnet-4-20250514'
+          model: DEFAULT_MODEL
         })
       });
 
@@ -343,17 +258,18 @@ export default function App() {
 
   const filteredCases = useMemo(() => {
     if (filter === 'All') return testCases;
-    return testCases.filter((tc) => tc.category.toLowerCase() === filter.toLowerCase());
+    return testCases.filter((tc) => {
+      const behaviour = (tc.behaviour || tc.category || 'positive').toLowerCase();
+      return behaviour === filter.toLowerCase();
+    });
   }, [testCases, filter]);
 
   const categoryCounts = useMemo(() => {
-    const counts = { All: testCases.length, Positive: 0, Negative: 0, Edge: 0, Auth: 0 };
+    const counts = { All: testCases.length, Positive: 0, Negative: 0 };
     testCases.forEach((tc) => {
-      const cat = tc.category?.toLowerCase();
-      if (cat === 'positive') counts.Positive++;
-      if (cat === 'negative') counts.Negative++;
-      if (cat === 'edge') counts.Edge++;
-      if (cat === 'auth') counts.Auth++;
+      const behaviour = (tc.behaviour || tc.category || 'positive').toLowerCase();
+      if (behaviour === 'positive') counts.Positive++;
+      if (behaviour === 'negative') counts.Negative++;
     });
     return counts;
   }, [testCases]);
@@ -372,10 +288,11 @@ export default function App() {
       return `"${text.replace(/"/g, '""')}"`;
     };
 
-    const headers = ['Test ID', 'Title', 'Preconditions', 'Steps', 'Expected Result'];
+    const headers = ['Title', 'Behaviour', 'Priority', 'Test Type', 'Test Steps', 'Expected Result'];
     const rows = testCases.map((tc) => {
-      const stepsText = Array.isArray(tc.steps)
-        ? tc.steps.map((step, index) => `${index + 1}. ${step}`).join('\n')
+      const steps = Array.isArray(tc.test_steps) ? tc.test_steps : tc.steps;
+      const stepsText = Array.isArray(steps)
+        ? steps.map((step, index) => `${index + 1}. ${step}`).join('\n')
         : '';
 
       const expectedResultText = typeof tc.expected_result === 'string'
@@ -383,9 +300,10 @@ export default function App() {
         : JSON.stringify(tc.expected_result || {}, null, 2);
 
       return [
-        csvEscape(tc.test_id || ''),
         csvEscape(tc.title || ''),
-        csvEscape(tc.preconditions || ''),
+        csvEscape(tc.behaviour || tc.category || ''),
+        csvEscape(tc.priority || ''),
+        csvEscape(tc.test_type || ''),
         csvEscape(stepsText),
         csvEscape(expectedResultText)
       ];
@@ -423,7 +341,7 @@ export default function App() {
             <span className="bg-primary text-background px-2 py-1 select-none">TCG</span>
             Test Case Generator
           </h1>
-          <p className="text-gray-400">AI-powered internal QA tool for backend API documentation</p>
+          <p className="text-gray-400">AI-powered UI test case generator for product documentation</p>
         </header>
 
         <section className="mb-8 grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -497,14 +415,14 @@ export default function App() {
               <div className="bg-[#0c121b] border border-gray-800 flex flex-col h-full rounded-sm overflow-hidden">
                 <div className="border-b border-gray-800 p-3 bg-black flex flex-wrap gap-2 items-center justify-between">
                   <div className="flex flex-wrap gap-2">
-                    {['All', 'Positive', 'Negative', 'Edge', 'Auth'].map(tab => (
+                    {['All', 'Positive', 'Negative'].map(tab => (
                       <button
                         key={tab}
                         onClick={() => setFilter(tab)}
-                        className={`px-3 py-1 text-xs uppercase tracking-wider transition-colors border ${filter === tab
+                        className={"px-3 py-1 text-xs uppercase tracking-wider transition-colors border " + (filter === tab
                           ? 'border-primary text-primary bg-primary/10'
                           : 'border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-700'
-                          }`}
+                        )}
                       >
                         {tab} [{categoryCounts[tab]}]
                       </button>
@@ -532,28 +450,36 @@ export default function App() {
                 </div>
 
                 <div className="flex-1 p-4 overflow-y-auto space-y-3 custom-scrollbar">
-                  {filteredCases.map((tc) => {
-                    const isExpanded = expandedCards[tc.test_id];
-                    const catLower = tc.category?.toLowerCase() || 'positive';
+                  {filteredCases.map((tc, idx) => {
+                    const rowId = tc.test_id || `TC-${String(idx + 1).padStart(3, '0')}`;
+                    const isExpanded = expandedCards[rowId];
+                    const catLower = (tc.behaviour || tc.category || 'positive').toLowerCase();
                     const colorClass = CATEGORY_STYLES[catLower] || CATEGORY_STYLES.positive;
                     const icon = CATEGORY_ICONS[catLower] || CATEGORY_ICONS.positive;
 
                     return (
-                      <div key={tc.test_id} className="border border-gray-800 bg-background overflow-hidden transition-all duration-200">
+                      <div key={rowId} className="border border-gray-800 bg-background overflow-hidden transition-all duration-200">
                         <div
                           className="p-3 flex items-start gap-3 cursor-pointer hover:bg-gray-900 transition-colors select-none"
-                          onClick={() => toggleCard(tc.test_id)}
+                          onClick={() => toggleCard(rowId)}
                         >
                           <div className="pt-0.5 shrink-0">{icon}</div>
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="font-bold text-gray-300">{tc.test_id}</span>
-                              <span className={`text-[10px] uppercase px-1.5 py-0.5 border ${colorClass} bg-opacity-10 opacity-80`}>
-                                {tc.category}
+                            <div className="flex items-center gap-2 mb-1 flex-wrap">
+                              <span className="font-bold text-gray-300">{rowId}</span>
+                              <span className={"text-[10px] uppercase px-1.5 py-0.5 border " + colorClass + " bg-opacity-10 opacity-80"}>
+                                {(tc.behaviour || tc.category || 'positive')}
                               </span>
-                              <span className="text-xs text-gray-500 font-mono truncate ml-2 px-1.5 py-0.5 bg-gray-900 rounded-sm">
-                                {tc.endpoint}
-                              </span>
+                              {tc.priority && (
+                                <span className="text-[10px] uppercase px-1.5 py-0.5 border border-gray-700 text-gray-300 bg-gray-900/50">
+                                  {tc.priority}
+                                </span>
+                              )}
+                              {tc.test_type && (
+                                <span className="text-[10px] uppercase px-1.5 py-0.5 border border-gray-700 text-gray-400 bg-gray-900/50">
+                                  {tc.test_type}
+                                </span>
+                              )}
                             </div>
                             <div className="text-gray-400 line-clamp-1">{tc.title}</div>
                           </div>
@@ -564,32 +490,23 @@ export default function App() {
 
                         {isExpanded && (
                           <div className="p-4 border-t border-gray-800 bg-[#06080c] text-sm flex flex-col gap-4">
+                            {tc.preconditions && tc.preconditions !== '-' && (
+                              <div>
+                                <div className="text-xs uppercase text-gray-500 mb-1">Preconditions</div>
+                                <div className="text-gray-300 bg-black p-2 rounded-sm border border-gray-800">{tc.preconditions}</div>
+                              </div>
+                            )}
                             <div>
-                              <div className="text-xs uppercase text-gray-500 mb-1">Preconditions</div>
-                              <div className="text-gray-300 bg-black p-2 rounded-sm border border-gray-800">{tc.preconditions}</div>
-                            </div>
-                            <div>
-                              <div className="text-xs uppercase text-gray-500 mb-1">Steps</div>
+                              <div className="text-xs uppercase text-gray-500 mb-1">Test Steps</div>
                               <ol className="list-decimal list-inside text-gray-300 bg-black p-2 rounded-sm border border-gray-800 space-y-1">
-                                {tc.steps.map((step, i) => <li key={i}>{step}</li>)}
+                                {(Array.isArray(tc.test_steps) ? tc.test_steps : (tc.steps || [])).map((step, i) => <li key={i}>{step}</li>)}
                               </ol>
                             </div>
-                            {tc.expected_status && (
-                              <div>
-                                <div className="text-xs uppercase text-gray-500 mb-1">Expected Status</div>
-                                <div className="text-gray-200 bg-black p-2 rounded-sm border border-gray-800">{tc.expected_status}</div>
-                              </div>
-                            )}
-                            {tc.request_payload && (
-                              <div>
-                                <div className="text-xs uppercase text-gray-500 mb-1">Request Payload</div>
-                                <pre className="text-gray-200 bg-black p-2 rounded-sm border border-gray-800 whitespace-pre-wrap break-words">{typeof tc.request_payload === 'string' ? tc.request_payload : JSON.stringify(tc.request_payload, null, 2)}</pre>
-                              </div>
-                            )}
                             <div>
                               <div className="text-xs uppercase text-gray-500 mb-1">Expected Result</div>
                               <div className="text-primary bg-primary/5 p-2 rounded-sm border border-primary/20">{tc.expected_result}</div>
-                            </div></div>
+                            </div>
+                          </div>
                         )}
                       </div>
                     );
@@ -609,7 +526,7 @@ export default function App() {
                 </div>
                 <h3 className="text-lg font-bold text-gray-400 mb-2">Awaiting Documentation</h3>
                 <p className="text-center max-w-sm text-xs">
-                  Upload a backend technical design PDF and hit generate. The AI will extract 35-50 detailed API test cases tailored to your specifications.
+                  Upload a UI/product requirements PDF and hit generate. The AI will extract detailed UI classic test cases tailored to your specifications.
                 </p>
               </div>
             )}
