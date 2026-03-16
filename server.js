@@ -8,7 +8,7 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.text({ limit: '50mb' }));
 
 const PORT = 3001;
-const DEFAULT_MODEL = process.env.OPENROUTER_MODEL || 'anthropic/claude-3.5-sonnet';
+const DEFAULT_MODEL = process.env.OPENROUTER_MODEL || 'openai/gpt-5.2';
 const MIN_TEST_CASES = 35;
 const MAX_EXPANSION_ATTEMPTS = 2;
 
