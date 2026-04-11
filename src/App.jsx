@@ -28,7 +28,7 @@ const getErrorMessage = (payload) => {
   return String(payload);
 };
 
-const DEFAULT_MODEL = import.meta.env.VITE_OPENROUTER_MODEL || 'anthropic/claude-3.5-sonnet';
+const DEFAULT_MODEL = import.meta.env.VITE_OPENROUTER_MODEL || 'openai/gpt-5.2';
 
 const SYSTEM_PROMPT = `You are a Senior Test engineer. Analyze the uploaded document and generate comprehensive test cases based on the requirements and features described.
 
